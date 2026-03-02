@@ -2,6 +2,7 @@ import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { io } from 'socket.io-client';
 import axios from 'axios';
 import ForceGraph2D from 'react-force-graph-2d';
+import AdvancedAnalytics from './components/AdvancedAnalytics';
 import {
   AlertTriangle, Activity, ShieldCheck, Download,
   LayoutDashboard, Settings, Network, Sun, Moon, Bell,
@@ -477,20 +478,6 @@ function App() {
         <Menu size={20} />
       </button>
 
-      {/* Sound Alert Indicator */}
-      <AnimatePresence>
-        {showSoundAlert && (
-          <motion.div 
-            className="sound-indicator"
-            initial={{ opacity: 0, scale: 0.8 }}
-            animate={{ opacity: 1, scale: 1 }}
-            exit={{ opacity: 0, scale: 0.8 }}
-          >
-            🔔 High-Risk Transaction Detected!
-          </motion.div>
-        )}
-      </AnimatePresence>
-
       {/* Keyboard Shortcuts Help */}
       <AnimatePresence>
         {showKeyboardShortcuts && (
@@ -622,7 +609,7 @@ function App() {
                 className={`filter-tag ${activeFilters.includes(filter) ? 'active' : ''}`}
                 onClick={() => toggleFilter(filter)}
               >
-                {filter === 'flagged' && '🚨 Flagged'}
+                {filter === 'flagged' && '� Flagged'}
                 {filter === 'high-risk' && '⚠️ High Risk'}
                 {filter === 'blocked' && '🚫 Blocked'}
                 {filter === 'investigating' && '🔍 Investigating'}
@@ -734,31 +721,21 @@ function App() {
                                 </div>
                                 {tx.flagReasons?.length > 0 && (
                                   <div style={{ fontSize: '0.62rem', color: '#f87171', maxWidth: '180px', lineHeight: 1.4 }}>
-                                    {tx.flagReasons.slice(0, 1).join('')}
+                                    {tx.flagReasons.slice(0, 2).join(' • ')}
                                   </div>
                                 )}
                               </div>
                             </td>
-                            <td>{statusBadge(tx)}</td>
                             <td>
-                              <div style={{ display: 'flex', gap: '6px' }}>
-                                {/* Investigate */}
-                                <button
-                                  className="action-btn-sm action-btn-sm-investigate"
-                                  onClick={() => setInvestigateTx(tx)}
-                                  title="Open investigation panel"
-                                >
-                                  <Search size={13} /> Investigate
-                                </button>
-                                {/* Block */}
-                                <button
-                                  className={`action-btn-sm action-btn-sm-block ${st === 'blocked' ? 'action-btn-sm-disabled' : ''}`}
-                                  onClick={(e) => handleDirectBlock(tx, e)}
-                                  disabled={st === 'blocked'}
-                                  title={st === 'blocked' ? 'Already blocked' : 'Block this account'}
-                                >
-                                  <Ban size={13} /> {st === 'blocked' ? 'Blocked' : 'Block'}
-                                </button>
+                              <span className={`status-badge status-${st}`}>
+                                {st === 'blocked' ? '🚫 Blocked' : st === 'investigating' ? '🔍 Investigating' : '✅ Cleared'}
+                              </span>
+                            </td>
+                            <td>
+                              <div style={{ display: 'flex', gap: '4px', justifyContent: 'flex-end' }}>
+                                <button className="action-btn" onClick={() => setInvestigateTx(tx)}>🔍</button>
+                                <button className="action-btn action-btn-block" onClick={() => handleAction(tx._id, 'block')} disabled={st !== 'pending'}>🚫</button>
+                                <button className="action-btn action-btn-clear" onClick={() => handleAction(tx._id, 'clear')} disabled={st === 'cleared'}>✅</button>
                               </div>
                             </td>
                           </motion.tr>
@@ -829,6 +806,11 @@ function App() {
               </table>
             </div>
           </div>
+        )}
+
+        {/* ── ANALYTICS ── */}
+        {activeTab === 'analytics' && (
+          <AdvancedAnalytics />
         )}
 
         {/* ── GRAPH ── */}
@@ -1070,57 +1052,6 @@ function App() {
                   <div style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', marginTop: '6px' }}>{c.sub}</div>
                 </motion.div>
               ))}
-            </div>
-
-            <div className="card" style={{ marginTop: '1rem' }}>
-              <h3>📊 Transaction Trends</h3>
-              <div style={{ height: '300px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)' }}>
-                <div style={{ textAlign: 'center' }}>
-                  <BarChart3 size={48} style={{ marginBottom: '1rem' }} />
-                  <p>Advanced analytics visualization coming soon</p>
-                  <p style={{ fontSize: '0.8rem', marginTop: '0.5rem' }}>Risk trends, patterns, and predictive analytics</p>
-                </div>
-              </div>
-            </div>
-
-            <div className="grid-2" style={{ marginTop: '1rem' }}>
-              <div className="card">
-                <h3>🎯 Top Risk Accounts</h3>
-                <div style={{ marginTop: '1rem' }}>
-                  {transactions
-                    .filter(tx => tx.riskScore > 0.6)
-                    .slice(0, 5)
-                    .map((tx, i) => (
-                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0', borderBottom: '1px solid var(--border-color)' }}>
-                        <span style={{ fontSize: '0.85rem' }}>{tx.fromAccount}</span>
-                        <span style={{ fontSize: '0.85rem', fontWeight: 600, color: tx.riskScore > 0.8 ? '#ef4444' : '#f59e0b' }}>
-                          {(tx.riskScore * 100).toFixed(0)}%
-                        </span>
-                      </div>
-                    ))}
-                </div>
-              </div>
-              
-              <div className="card">
-                <h3>📈 Channel Distribution</h3>
-                <div style={{ marginTop: '1rem' }}>
-                  {['UPI', 'APP', 'ATM', 'WALLET', 'WEB'].map(channel => {
-                    const count = transactions.filter(tx => tx.channel === channel).length;
-                    const percentage = (count / transactions.length * 100).toFixed(0);
-                    return (
-                      <div key={channel} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0', borderBottom: '1px solid var(--border-color)' }}>
-                        <span style={{ fontSize: '0.85rem' }}>{channel}</span>
-                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-                          <div style={{ width: '60px', height: '4px', background: 'var(--risk-track)', borderRadius: '2px' }}>
-                            <div style={{ width: `${percentage}%`, height: '100%', background: 'var(--accent-blue)', borderRadius: '2px' }} />
-                          </div>
-                          <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>{percentage}%</span>
-                        </div>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
             </div>
           </>
         )}
