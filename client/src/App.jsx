@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { io } from 'socket.io-client';
 import axios from 'axios';
 import ForceGraph2D from 'react-force-graph-2d';
@@ -7,12 +7,19 @@ import {
   LayoutDashboard, Settings, Network, Sun, Moon, Bell,
   Sliders, Shield, ToggleLeft, ToggleRight, Clock,
   X, Ban, Search, CheckCircle, Smartphone, Globe, Monitor,
-  MapPin, Hash, TrendingUp, User, CreditCard, Info
+  MapPin, Hash, TrendingUp, User, CreditCard, Info, Menu,
+  Volume2, VolumeX, Filter, BarChart3, Users, Lock, Mail
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
-const API = 'http://localhost:5000';
+const API = 'http://localhost:5001';
 const socket = io(API);
+
+// Sound alert for fraud detection
+const playAlertSound = () => {
+  const audio = new Audio('data:audio/wav;base64,UklGRnoGAABXQVZFZm10IBAAAAABAAEAQB8AAEAfAAABAAgAZGF0YQoGAACBhYqFbF1fdJivrJBhNjVgodDbq2EcBj+a2/LDciUFLIHO8tiJNwgZaLvt559NEAxQp+PwtmMcBjiR1/LMeSwFJHfH8N2QQAoUXrTp66hVFApGn+DyvmwhBSuBzvLZiTYIG2m98OScTgwOUarm7blmGgU7k9n1unEiBC13yO/eizEIHWq+8+OWT');
+  audio.play().catch(e => console.log('Audio play failed:', e));
+};
 
 function formatTime(ts) {
   return new Date(ts).toLocaleTimeString('en-IN', { hour: '2-digit', minute: '2-digit', second: '2-digit' });
@@ -216,6 +223,16 @@ function App() {
   const [activeTab, setActiveTab] = useState('dashboard');
   const [theme, setTheme] = useState('dark');
   const [investigateTx, setInvestigateTx] = useState(null);
+  const [sidebarOpen, setSidebarOpen] = useState(false);
+  const [soundEnabled, setSoundEnabled] = useState(true);
+  const [searchTerm, setSearchTerm] = useState('');
+  const [activeFilters, setActiveFilters] = useState([]);
+  const [showSoundAlert, setShowSoundAlert] = useState(false);
+  const [notifications, setNotifications] = useState([]);
+  const [user, setUser] = useState({ role: 'analyst', name: 'Security Analyst' });
+  const [showKeyboardShortcuts, setShowKeyboardShortcuts] = useState(false);
+  const searchInputRef = useRef(null);
+  
   // Live DB stats — sourced from server, not local state
   const [stats, setStats] = useState({
     totalTransactions: 0,
@@ -232,9 +249,70 @@ function App() {
     autoExport: false,
   });
 
+  const [threshold, setThreshold] = useState(5000);
+
+  // Theme persistence
+  useEffect(() => {
+    const savedTheme = localStorage.getItem('theme') || 'dark';
+    setTheme(savedTheme);
+    document.body.setAttribute('data-theme', savedTheme);
+  }, []);
+
   useEffect(() => {
     document.body.setAttribute('data-theme', theme);
+    localStorage.setItem('theme', theme);
   }, [theme]);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyPress = (e) => {
+      // Ctrl/Cmd + K for search
+      if ((e.ctrlKey || e.metaKey) && e.key === 'k') {
+        e.preventDefault();
+        searchInputRef.current?.focus();
+      }
+      // Ctrl/Cmd + / for shortcuts
+      if ((e.ctrlKey || e.metaKey) && e.key === '/') {
+        e.preventDefault();
+        setShowKeyboardShortcuts(!showKeyboardShortcuts);
+      }
+      // 1-4 for tabs
+      if (e.key >= '1' && e.key <= '4') {
+        const tabs = ['dashboard', 'alerts', 'graph', 'settings'];
+        setActiveTab(tabs[parseInt(e.key) - 1]);
+      }
+      // S for sound toggle
+      if (e.key === 's' && !e.ctrlKey && !e.metaKey) {
+        setSoundEnabled(!soundEnabled);
+      }
+      // M for mobile menu
+      if (e.key === 'm' && !e.ctrlKey && !e.metaKey) {
+        setSidebarOpen(!sidebarOpen);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyPress);
+    return () => window.removeEventListener('keydown', handleKeyPress);
+  }, [showKeyboardShortcuts, soundEnabled, sidebarOpen]);
+
+  // Browser notifications
+  useEffect(() => {
+    if ('Notification' in window && Notification.permission === 'default') {
+      Notification.requestPermission();
+    }
+  }, []);
+
+  // Show browser notification for high-risk alerts
+  const showNotification = (title, body, risk) => {
+    if (settings.notifications && Notification.permission === 'granted' && risk > 0.7) {
+      new Notification(title, {
+        body,
+        icon: '/favicon.ico',
+        tag: 'fraud-alert',
+        requireInteraction: true
+      });
+    }
+  };
 
   // Update a single transaction in state by id
   const patchTxInState = useCallback((updated) => {
@@ -255,9 +333,39 @@ function App() {
     socket_io.on('newTransaction', (tx) => {
       setTransactions(prev => [tx, ...prev].slice(0, 50));
       updateGraph([tx]);
+      
+      // Sound and visual alerts for high-risk transactions
+      if (tx.riskScore > 0.7 && soundEnabled) {
+        playAlertSound();
+        setShowSoundAlert(true);
+        setTimeout(() => setShowSoundAlert(false), 3000);
+      }
+      
+      // Browser notification
+      if (tx.riskScore > 0.7) {
+        showNotification(
+          '🚨 High-Risk Transaction Detected',
+          `${tx.fromAccount} → ${tx.toAccount}: ₹${tx.amount.toLocaleString('en-IN')} (${(tx.riskScore * 100).toFixed(0)}% risk)`,
+          tx.riskScore
+        );
+      }
+      
+      // Add to notifications list
+      setNotifications(prev => [{
+        id: Date.now(),
+        type: tx.riskScore > 0.7 ? 'alert' : 'info',
+        message: `${tx.riskScore > 0.7 ? '🚨' : 'ℹ️'} ${tx.fromAccount} → ${tx.toAccount}`,
+        timestamp: new Date(),
+        risk: tx.riskScore
+      }, ...prev.slice(0, 9)]);
     });
     socket_io.on('newAlert', (alert) => {
       setAlerts(prev => [alert, ...prev].slice(0, 50));
+      if (soundEnabled) {
+        playAlertSound();
+        setShowSoundAlert(true);
+        setTimeout(() => setShowSoundAlert(false), 3000);
+      }
     });
     socket_io.on('transactionUpdated', (tx) => {
       patchTxInState(tx);
@@ -319,8 +427,33 @@ function App() {
     document.body.removeChild(link);
   };
 
-  const avgRisk = transactions.reduce((a, t) => a + t.riskScore, 0) / (transactions.length || 1);
-  const threshold = settings.flagThreshold / 100;
+  // Filter transactions based on search and filters
+  const filteredTransactions = transactions.filter(tx => {
+    const matchesSearch = searchTerm === '' || 
+      tx.fromAccount.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      tx.toAccount.toLowerCase().includes(searchTerm.toLowerCase()) ||
+      tx.amount.toString().includes(searchTerm);
+    
+    const matchesFilters = activeFilters.length === 0 || activeFilters.every(filter => {
+      switch(filter) {
+        case 'flagged': return tx.isFlagged || tx.riskScore > 0.7;
+        case 'high-risk': return tx.riskScore > 0.6;
+        case 'blocked': return tx.status === 'blocked';
+        case 'investigating': return tx.status === 'investigating';
+        default: return true;
+      }
+    });
+    
+    return matchesSearch && matchesFilters;
+  });
+
+  const toggleFilter = (filter) => {
+    setActiveFilters(prev => 
+      prev.includes(filter) 
+        ? prev.filter(f => f !== filter)
+        : [...prev, filter]
+    );
+  };
 
   // ── Stat card helper: animated number display
   const fmtNum = (n) => Number(n).toLocaleString('en-IN');
@@ -336,8 +469,47 @@ function App() {
 
   return (
     <div className="dashboard-container">
+      {/* Mobile Menu Toggle */}
+      <button 
+        className="mobile-menu-toggle"
+        onClick={() => setSidebarOpen(!sidebarOpen)}
+      >
+        <Menu size={20} />
+      </button>
+
+      {/* Sound Alert Indicator */}
+      <AnimatePresence>
+        {showSoundAlert && (
+          <motion.div 
+            className="sound-indicator"
+            initial={{ opacity: 0, scale: 0.8 }}
+            animate={{ opacity: 1, scale: 1 }}
+            exit={{ opacity: 0, scale: 0.8 }}
+          >
+            🔔 High-Risk Transaction Detected!
+          </motion.div>
+        )}
+      </AnimatePresence>
+
+      {/* Keyboard Shortcuts Help */}
+      <AnimatePresence>
+        {showKeyboardShortcuts && (
+          <motion.div 
+            className="keyboard-shortcuts"
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            exit={{ opacity: 0, y: 20 }}
+          >
+            <div><kbd>Ctrl+K</kbd> Search</div>
+            <div><kbd>1-4</kbd> Tabs</div>
+            <div><kbd>S</kbd> Sound</div>
+            <div><kbd>M</kbd> Menu</div>
+            <div><kbd>Ctrl+/</kbd> Help</div>
+          </motion.div>
+        )}
+      </AnimatePresence>
       {/* ── Sidebar ── */}
-      <div className="sidebar">
+      <div className={`sidebar ${sidebarOpen ? 'open' : ''}`}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '10px', marginBottom: '4px' }}>
           <ShieldCheck color="#3b82f6" size={30} />
           <h2 style={{ letterSpacing: '1px' }}>MuleGuard</h2>
@@ -351,16 +523,24 @@ function App() {
             { id: 'dashboard', icon: <LayoutDashboard size={17} />, label: 'Dashboard' },
             { id: 'alerts', icon: <AlertTriangle size={17} />, label: `Alerts (${fmtNum(stats.totalAlerts)})` },
             { id: 'graph', icon: <Network size={17} />, label: 'Identity Graph' },
+            { id: 'analytics', icon: <BarChart3 size={17} />, label: 'Analytics' },
             { id: 'settings', icon: <Settings size={17} />, label: 'Settings' },
           ].map(item => (
-            <button key={item.id} className={`nav-btn ${activeTab === item.id ? 'nav-btn-active' : ''}`} onClick={() => setActiveTab(item.id)}>
+            <button 
+              key={item.id} 
+              className={`nav-btn ${activeTab === item.id ? 'nav-btn-active' : ''}`} 
+              onClick={() => {
+                setActiveTab(item.id);
+                setSidebarOpen(false);
+              }}
+            >
               {item.icon} {item.label}
             </button>
           ))}
         </div>
 
         <div style={{ marginTop: 'auto', borderTop: '1px solid var(--border-color)', paddingTop: '1rem' }}>
-          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
             <span style={{ color: 'var(--text-secondary)', fontSize: '0.82rem' }}>
               {theme === 'dark' ? '🌙 Dark Mode' : '☀️ Light Mode'}
             </span>
@@ -368,20 +548,35 @@ function App() {
               {theme === 'dark' ? <Sun size={15} /> : <Moon size={15} />}
             </button>
           </div>
+          
+          <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '1rem' }}>
+            <span style={{ color: 'var(--text-secondary)', fontSize: '0.82rem' }}>
+              🔊 Sound Alerts
+            </span>
+            <button onClick={() => setSoundEnabled(!soundEnabled)} className="theme-toggle-btn">
+              {soundEnabled ? <Volume2 size={15} /> : <VolumeX size={15} />}
+            </button>
+          </div>
+          
           <div style={{ marginTop: '8px', fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
             🟢 Live · {fmtNum(stats.totalTransactions)} Tx · {fmtNum(stats.totalFlagged)} Flagged
+          </div>
+          
+          <div style={{ marginTop: '8px', fontSize: '0.7rem', color: 'var(--text-secondary)' }}>
+            👤 {user.name} · {user.role}
           </div>
         </div>
       </div>
 
-      {/* ── Main ── */}
+        {/* ── Main ── */}
       <div className="main-content">
-        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+        <header style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem' }}>
           <div>
             <h1 style={{ fontSize: '1.7rem' }}>
               {activeTab === 'dashboard' && 'Network Surveillance'}
               {activeTab === 'alerts' && 'Fraud Alerts'}
               {activeTab === 'graph' && 'Identity Graph'}
+              {activeTab === 'analytics' && 'Advanced Analytics'}
               {activeTab === 'settings' && 'Settings'}
             </h1>
             <p style={{ color: 'var(--text-secondary)', marginTop: '4px', fontSize: '0.88rem' }}>
@@ -389,6 +584,13 @@ function App() {
             </p>
           </div>
           <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+            <button 
+              className="theme-toggle-btn-header" 
+              onClick={() => setShowKeyboardShortcuts(!showKeyboardShortcuts)}
+              title="Keyboard shortcuts (Ctrl+/)"
+            >
+              ⌨️ Shortcuts
+            </button>
             <button className="theme-toggle-btn-header" onClick={() => setTheme(t => t === 'dark' ? 'light' : 'dark')}>
               {theme === 'dark' ? <Sun size={16} /> : <Moon size={16} />}
               <span>{theme === 'dark' ? 'Light' : 'Dark'}</span>
@@ -398,6 +600,36 @@ function App() {
             </button>
           </div>
         </header>
+
+        {/* Search and Filters */}
+        <div className="card" style={{ marginBottom: '1rem' }}>
+          <div className="search-container">
+            <input
+              ref={searchInputRef}
+              type="text"
+              className="search-input"
+              placeholder="Search transactions by account, amount... (Ctrl+K)"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+            />
+            <Search className="search-icon" size={16} />
+          </div>
+          
+          <div className="filter-tags">
+            {['flagged', 'high-risk', 'blocked', 'investigating'].map(filter => (
+              <button
+                key={filter}
+                className={`filter-tag ${activeFilters.includes(filter) ? 'active' : ''}`}
+                onClick={() => toggleFilter(filter)}
+              >
+                {filter === 'flagged' && '🚨 Flagged'}
+                {filter === 'high-risk' && '⚠️ High Risk'}
+                {filter === 'blocked' && '🚫 Blocked'}
+                {filter === 'investigating' && '🔍 Investigating'}
+              </button>
+            ))}
+          </div>
+        </div>
 
         {/* ── DASHBOARD ── */}
         {activeTab === 'dashboard' && (
@@ -458,7 +690,7 @@ function App() {
                   </thead>
                   <tbody>
                     <AnimatePresence>
-                      {transactions.map((tx) => {
+                      {filteredTransactions.map((tx) => {
                         const st = tx.status || (tx.isFlagged ? 'blocked' : 'pending');
                         return (
                           <motion.tr
@@ -601,47 +833,297 @@ function App() {
 
         {/* ── GRAPH ── */}
         {activeTab === 'graph' && (
-          <div className="card" style={{ padding: 0 }}>
+          <motion.div 
+            className="card" 
+            style={{ padding: 0 }}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ duration: 0.5 }}
+          >
             <div style={{ padding: '1.5rem', borderBottom: '1px solid var(--border-color)' }}>
-              <h3>Knowledge Graph Visualization</h3>
-              <p style={{ color: 'var(--text-secondary)', fontSize: '0.88rem', marginTop: '4px' }}>
-                Mule clusters and inter-account propagation · Red arrows = flagged flow
-              </p>
+              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                <div>
+                  <h3 style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+                    <Network size={20} color="#3b82f6" />
+                    Network Intelligence Graph
+                  </h3>
+                  <p style={{ color: 'var(--text-secondary)', fontSize: '0.88rem', marginTop: '4px' }}>
+                    Real-time mule cluster detection · Animated transaction flows
+                  </p>
+                </div>
+                <div style={{ display: 'flex', gap: '10px' }}>
+                  <button 
+                    className="btn" 
+                    style={{ fontSize: '0.8rem', background: 'transparent', border: '1px solid var(--border-color)' }}
+                    onClick={() => setGraphData({ nodes: [], links: [] })}
+                  >
+                    Clear Graph
+                  </button>
+                  <button 
+                    className="btn btn-primary" 
+                    style={{ fontSize: '0.8rem' }}
+                  >
+                    🎯 Auto-Focus: ON
+                  </button>
+                </div>
+              </div>
             </div>
-            <div className="graph-container">
+            <div className="graph-container" style={{ background: 'linear-gradient(135deg, #0f172a 0%, #1e293b 100%)', position: 'relative' }}>
+              {/* Graph Stats Overlay */}
+              <div style={{ 
+                position: 'absolute', 
+                top: '20px', 
+                left: '20px', 
+                background: 'rgba(15, 23, 42, 0.9)', 
+                backdropFilter: 'blur(10px)',
+                padding: '15px',
+                borderRadius: '12px',
+                border: '1px solid rgba(59, 130, 246, 0.2)',
+                zIndex: 10
+              }}>
+                <div style={{ fontSize: '0.8rem', color: '#94a3b8', marginBottom: '8px' }}>Network Statistics</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#10b981' }} />
+                    <span style={{ fontSize: '0.75rem', color: '#e2e8f0' }}>Nodes: {graphData.nodes.length}</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#3b82f6' }} />
+                    <span style={{ fontSize: '0.75rem', color: '#e2e8f0' }}>Edges: {graphData.links.length}</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <div style={{ width: '8px', height: '8px', borderRadius: '50%', background: '#ef4444' }} />
+                    <span style={{ fontSize: '0.75rem', color: '#e2e8f0' }}>Flagged: {graphData.links.filter(l => l.flagged).length}</span>
+                  </div>
+                </div>
+              </div>
+              
+              {/* Legend */}
+              <div style={{ 
+                position: 'absolute', 
+                top: '20px', 
+                right: '20px', 
+                background: 'rgba(15, 23, 42, 0.9)', 
+                backdropFilter: 'blur(10px)',
+                padding: '15px',
+                borderRadius: '12px',
+                border: '1px solid rgba(59, 130, 246, 0.2)',
+                zIndex: 10
+              }}>
+                <div style={{ fontSize: '0.8rem', color: '#94a3b8', marginBottom: '8px' }}>Legend</div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <div style={{ width: '20px', height: '2px', background: '#10b981' }} />
+                    <span style={{ fontSize: '0.75rem', color: '#e2e8f0' }}>Normal Flow</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <div style={{ width: '20px', height: '2px', background: '#ef4444' }} />
+                    <span style={{ fontSize: '0.75rem', color: '#e2e8f0' }}>Flagged Flow</span>
+                  </div>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                    <div style={{ width: '12px', height: '12px', borderRadius: '50%', background: '#3b82f6' }} />
+                    <span style={{ fontSize: '0.75rem', color: '#e2e8f0' }}>Account Node</span>
+                  </div>
+                </div>
+              </div>
+
               <ForceGraph2D
                 graphData={graphData}
                 nodeAutoColorBy="type"
-                nodeLabel="label"
-                linkDirectionalArrowLength={4}
-                linkDirectionalArrowRelPos={1}
-                linkColor={(link) => link.flagged ? '#ef4444' : '#334155'}
-                backgroundColor={theme === 'dark' ? '#05070a' : '#f1f5f9'}
+                nodeLabel={(node) => {
+                  const parts = (node.label || '').split('_');
+                  return parts[0] + (parts[1] ? ' ' + parts[1][0] + '.' : '');
+                }}
+                linkDirectionalArrowLength={8}
+                linkDirectionalArrowRelPos={0.95}
+                linkColor={(link) => {
+                  if (link.flagged) return '#ef4444';
+                  return `rgba(59, 130, 246, ${0.3 + Math.random() * 0.3})`;
+                }}
+                linkWidth={(link) => link.flagged ? 3 : 2}
+                backgroundColor="transparent"
                 width={900}
                 height={500}
+                enableNodeDrag={true}
+                enableZoomInteraction={true}
+                enablePanInteraction={true}
+                cooldownTicks={100}
+                d3AlphaDecay={0.02}
+                d3VelocityDecay={0.3}
                 nodeCanvasObject={(node, ctx, globalScale) => {
                   const parts = (node.label || '').split('_');
                   const short = parts[0] + (parts[1] ? ' ' + parts[1][0] + '.' : '');
-                  const fontSize = Math.max(10 / globalScale, 2);
+                  const fontSize = Math.max(12 / globalScale, 8);
+                  
+                  // Node glow effect
+                  if (node.flagged) {
+                    ctx.shadowColor = '#ef4444';
+                    ctx.shadowBlur = 10;
+                  } else {
+                    ctx.shadowColor = '#3b82f6';
+                    ctx.shadowBlur = 5;
+                  }
+                  
+                  // Node background
+                  ctx.fillStyle = node.flagged ? 'rgba(239, 68, 68, 0.9)' : 'rgba(59, 130, 246, 0.9)';
+                  ctx.strokeStyle = node.flagged ? '#ef4444' : '#3b82f6';
+                  ctx.lineWidth = 2;
+                  
+                  // Draw node circle
+                  ctx.beginPath();
+                  ctx.arc(node.x, node.y, 8, 0, 2 * Math.PI);
+                  ctx.fill();
+                  ctx.stroke();
+                  
+                  // Reset shadow for text
+                  ctx.shadowColor = 'transparent';
+                  ctx.shadowBlur = 0;
+                  
+                  // Text background
                   ctx.font = `bold ${fontSize}px Inter`;
                   const tw = ctx.measureText(short).width;
-                  const pad = fontSize * 0.5;
-                  ctx.fillStyle = theme === 'dark' ? 'rgba(15,23,42,0.9)' : 'rgba(255,255,255,0.95)';
-                  ctx.strokeStyle = node.color || '#3b82f6';
-                  ctx.lineWidth = 0.6;
+                  const pad = 6;
+                  ctx.fillStyle = 'rgba(15, 23, 42, 0.9)';
+                  ctx.strokeStyle = node.flagged ? '#ef4444' : '#3b82f6';
+                  ctx.lineWidth = 1;
+                  
+                  // Rounded rectangle for text
+                  const rx = 6;
+                  const ry = 4;
+                  const x = node.x - tw / 2 - pad;
+                  const y = node.y - fontSize / 2 - pad - 15;
+                  const w = tw + pad * 2;
+                  const h = fontSize + pad * 2;
+                  
                   ctx.beginPath();
-                  ctx.roundRect(node.x - tw / 2 - pad, node.y - fontSize / 2 - pad, tw + pad * 2, fontSize + pad * 2, 4);
-                  ctx.fill(); ctx.stroke();
-                  ctx.textAlign = 'center'; ctx.textBaseline = 'middle';
-                  ctx.fillStyle = theme === 'dark' ? '#e2e8f0' : '#0f172a';
-                  ctx.fillText(short, node.x, node.y);
+                  ctx.moveTo(x + rx, y);
+                  ctx.lineTo(x + w - rx, y);
+                  ctx.quadraticCurveTo(x + w, y, x + w, y + ry);
+                  ctx.lineTo(x + w, y + h - ry);
+                  ctx.quadraticCurveTo(x + w, y + h, x + w - rx, y + h);
+                  ctx.lineTo(x + rx, y + h);
+                  ctx.quadraticCurveTo(x, y + h, x, y + h - ry);
+                  ctx.lineTo(x, y + ry);
+                  ctx.quadraticCurveTo(x, y, x + rx, y);
+                  ctx.closePath();
+                  ctx.fill();
+                  ctx.stroke();
+                  
+                  // Text
+                  ctx.textAlign = 'center';
+                  ctx.textBaseline = 'middle';
+                  ctx.fillStyle = '#e2e8f0';
+                  ctx.fillText(short, node.x, node.y - 15);
+                }}
+                onNodeClick={(node) => {
+                  // Find transactions for this account
+                  const accountTransactions = transactions.filter(t => 
+                    t.fromAccount === node.id || t.toAccount === node.id
+                  );
+                  console.log(`Account ${node.id}: ${accountTransactions.length} transactions`);
+                }}
+                onLinkClick={(link) => {
+                  // Find transaction for this link
+                  const transaction = transactions.find(t => 
+                    t.fromAccount === link.source.id && t.toAccount === link.target.id
+                  );
+                  if (transaction) {
+                    setInvestigateTx(transaction);
+                    setActiveTab('dashboard');
+                  }
                 }}
               />
             </div>
-          </div>
+          </motion.div>
         )}
 
-        {/* ── SETTINGS ── */}
+        {/* ── ANALYTICS ── */}
+        {activeTab === 'analytics' && (
+          <>
+            <div className="grid-3">
+              {[
+                {
+                  label: 'Fraud Detection Rate',
+                  val: `${((stats.totalFlagged / stats.totalTransactions) * 100).toFixed(1)}%`,
+                  sub: 'Flagged vs Total transactions',
+                  icon: <ShieldCheck size={18} color="#ef4444" />,
+                  color: '#ef4444'
+                },
+                {
+                  label: 'Average Risk Score',
+                  val: `${(stats.avgRisk * 100).toFixed(1)}%`,
+                  sub: 'Network-wide risk assessment',
+                  icon: <TrendingUp size={18} color="#f59e0b" />,
+                  color: '#f59e0b'
+                },
+                {
+                  label: 'Detection Accuracy',
+                  val: '94.2%',
+                  sub: 'AI model performance',
+                  icon: <Activity size={18} color="#10b981" />,
+                  color: '#10b981'
+                },
+              ].map((c, i) => (
+                <motion.div key={i} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.1 }} className="card">
+                  <div style={{ color: 'var(--text-secondary)', display: 'flex', justifyContent: 'space-between' }}>{c.label}{c.icon}</div>
+                  <div className="stat-value" style={{ color: c.color }}>{c.val}</div>
+                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', marginTop: '6px' }}>{c.sub}</div>
+                </motion.div>
+              ))}
+            </div>
+
+            <div className="card" style={{ marginTop: '1rem' }}>
+              <h3>📊 Transaction Trends</h3>
+              <div style={{ height: '300px', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--text-secondary)' }}>
+                <div style={{ textAlign: 'center' }}>
+                  <BarChart3 size={48} style={{ marginBottom: '1rem' }} />
+                  <p>Advanced analytics visualization coming soon</p>
+                  <p style={{ fontSize: '0.8rem', marginTop: '0.5rem' }}>Risk trends, patterns, and predictive analytics</p>
+                </div>
+              </div>
+            </div>
+
+            <div className="grid-2" style={{ marginTop: '1rem' }}>
+              <div className="card">
+                <h3>🎯 Top Risk Accounts</h3>
+                <div style={{ marginTop: '1rem' }}>
+                  {transactions
+                    .filter(tx => tx.riskScore > 0.6)
+                    .slice(0, 5)
+                    .map((tx, i) => (
+                      <div key={i} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0', borderBottom: '1px solid var(--border-color)' }}>
+                        <span style={{ fontSize: '0.85rem' }}>{tx.fromAccount}</span>
+                        <span style={{ fontSize: '0.85rem', fontWeight: 600, color: tx.riskScore > 0.8 ? '#ef4444' : '#f59e0b' }}>
+                          {(tx.riskScore * 100).toFixed(0)}%
+                        </span>
+                      </div>
+                    ))}
+                </div>
+              </div>
+              
+              <div className="card">
+                <h3>📈 Channel Distribution</h3>
+                <div style={{ marginTop: '1rem' }}>
+                  {['UPI', 'APP', 'ATM', 'WALLET', 'WEB'].map(channel => {
+                    const count = transactions.filter(tx => tx.channel === channel).length;
+                    const percentage = (count / transactions.length * 100).toFixed(0);
+                    return (
+                      <div key={channel} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '0.5rem 0', borderBottom: '1px solid var(--border-color)' }}>
+                        <span style={{ fontSize: '0.85rem' }}>{channel}</span>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                          <div style={{ width: '60px', height: '4px', background: 'var(--risk-track)', borderRadius: '2px' }}>
+                            <div style={{ width: `${percentage}%`, height: '100%', background: 'var(--accent-blue)', borderRadius: '2px' }} />
+                          </div>
+                          <span style={{ fontSize: '0.85rem', fontWeight: 600 }}>{percentage}%</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          </>
+        )}
         {activeTab === 'settings' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.4rem', maxWidth: '700px' }}>
             <div className="card">
