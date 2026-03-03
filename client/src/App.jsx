@@ -1021,39 +1021,7 @@ function App() {
 
         {/* ── ANALYTICS ── */}
         {activeTab === 'analytics' && (
-          <>
-            <div className="grid-3">
-              {[
-                {
-                  label: 'Fraud Detection Rate',
-                  val: `${((stats.totalFlagged / stats.totalTransactions) * 100).toFixed(1)}%`,
-                  sub: 'Flagged vs Total transactions',
-                  icon: <ShieldCheck size={18} color="#ef4444" />,
-                  color: '#ef4444'
-                },
-                {
-                  label: 'Average Risk Score',
-                  val: `${(stats.avgRisk * 100).toFixed(1)}%`,
-                  sub: 'Network-wide risk assessment',
-                  icon: <TrendingUp size={18} color="#f59e0b" />,
-                  color: '#f59e0b'
-                },
-                {
-                  label: 'Detection Accuracy',
-                  val: '94.2%',
-                  sub: 'AI model performance',
-                  icon: <Activity size={18} color="#10b981" />,
-                  color: '#10b981'
-                },
-              ].map((c, i) => (
-                <motion.div key={i} initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ delay: i * 0.1 }} className="card">
-                  <div style={{ color: 'var(--text-secondary)', display: 'flex', justifyContent: 'space-between' }}>{c.label}{c.icon}</div>
-                  <div className="stat-value" style={{ color: c.color }}>{c.val}</div>
-                  <div style={{ color: 'var(--text-secondary)', fontSize: '0.82rem', marginTop: '6px' }}>{c.sub}</div>
-                </motion.div>
-              ))}
-            </div>
-          </>
+          <AdvancedAnalytics />
         )}
         {activeTab === 'settings' && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '1.4rem', maxWidth: '700px' }}>

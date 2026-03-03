@@ -336,48 +336,6 @@ const AdvancedAnalytics = () => {
           </div>
         </motion.div>
 
-        {/* Hourly Patterns */}
-        <motion.div
-          initial={{ opacity: 0, scale: 0.95 }}
-          animate={{ opacity: 1, scale: 1 }}
-          transition={{ delay: 0.4 }}
-          className="analytics-chart-container full-width"
-        >
-          <div className="analytics-chart-header">
-            <h3>Hourly Transaction Patterns</h3>
-            <Clock size={16} />
-          </div>
-          <div className="analytics-chart-content">
-            <div className="hourly-chart">
-              {data.hourlyPatterns && data.hourlyPatterns.length > 0 ? (
-                data.hourlyPatterns.map((hour, i) => (
-                  <div key={i} className="hourly-bar">
-                    <div 
-                      className="hourly-transactions-bar"
-                      style={{ 
-                        height: `${Math.max((hour.transactions / Math.max(...data.hourlyPatterns.map(h => h.transactions))) * 100, 5)}%`,
-                        background: '#3b82f6'
-                      }}
-                    />
-                    <div 
-                      className="hourly-flagged-bar"
-                      style={{ 
-                        height: `${Math.max((hour.flagged / Math.max(...data.hourlyPatterns.map(h => h.flagged))) * 100, 5)}%`,
-                        background: '#ef4444'
-                      }}
-                    />
-                    <div className="hourly-label">{hour.hour}:00</div>
-                  </div>
-                ))
-              ) : (
-                <div style={{ textAlign: 'center', color: 'var(--text-secondary)', padding: '2rem' }}>
-                  No hourly data available
-                </div>
-              )}
-            </div>
-          </div>
-        </motion.div>
-
         {/* Device Analytics */}
         <motion.div
           initial={{ opacity: 0, scale: 0.95 }}
